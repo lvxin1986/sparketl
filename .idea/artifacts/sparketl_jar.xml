@@ -1,0 +1,8 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="sparketl:jar">
+    <output-path>$PROJECT_DIR$/out/artifacts/sparketl_jar</output-path>
+    <root id="archive" name="sparketl.jar">
+      <element id="module-output" name="sparketl" />
+    </root>
+  </artifact>
+</component>

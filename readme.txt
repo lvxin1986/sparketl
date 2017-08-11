@@ -1,2 +1,2 @@
 U can submit the job using the following command:
- $SPARK_HOME/bin/spark-submit  --class  com.jd.etl.Mysql2Orc --num-executors 2 --driver-memory 1g --executor-memory 1g --executor-cores 1 /software/servers/spark-2.2.0-SNAPSHOT-bin-hadoop-2.6.1/lvxin_examples/sparketl.jar hive_db.hive_table  hdfs://ns1/tmp/test1
+$SPARK_HOME/bin/spark-submit  --class  com.jd.etl.Mysql2Orc --num-executors 2 --driver-memory 1g --executor-memory 1g --executor-cores 1 sparketl.jar source.orc_test  hdfs://ns1/tmp/test1/
