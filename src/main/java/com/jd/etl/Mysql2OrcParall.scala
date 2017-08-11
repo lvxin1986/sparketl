@@ -49,23 +49,27 @@ object Mysql2OrcParall {
       }
       tasks+=task
     }
-    while (status.size < tasks.size)
-    {
-      println("[INFO] Total Jobs number is:" + tasks.size +" and completed: "+status.size )
-      Thread.sleep(1000)
-    }
+//    while (status.size < tasks.size)
+//    {
+//      println("[INFO] Total Jobs number is:" + tasks.size +" and completed: "+status.size )
+//      Thread.sleep(1000)
+//    }
+
+
+    // Now wait for the tasks to finish before exiting the app
+    Await.result(Future.sequence(tasks), Duration(1, DAYS))
     println("[INFO] All Jobs has completed and the informations are:" )
     for(i <- 0 until status.length){
       println("[INFO]" +status(i))
     }
-
-    // Now wait for the tasks to finish before exiting the app
-//    Await.result(Future.sequence(tasks), Duration(1, DAYS))
+    spark.sparkContext.stop()
+      Runtime.getRuntime.exit(0);
   }
+
   def doEtlPerTbl(ss: SparkSession, sql:String,outPath: String)(implicit xc: ExecutionContext) = Future {
       var message = "NULl";
       ss.sql(sql).write.orc(outPath)
-      message = "[INFO] execute the sql : sql and write the orc file in outPath successfully!"
+      message = "[INFO] execute the sql : "+sql+" and write the orc file in "+outPath+" successfully!"
       message
 
   }
