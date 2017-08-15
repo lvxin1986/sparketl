@@ -4,10 +4,12 @@ import java.io.ByteArrayInputStream
 import java.lang.Exception
 import java.util.Properties
 
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import java.util.concurrent.Executors
 
 import com.jd.etl.consts.ETLConst
+import com.jd.etl.utils.ColumnUtil
+import org.apache.spark.sql.types.{IntegerType, LongType, StringType}
 
 import scala.collection.mutable
 import scala.concurrent._
@@ -157,18 +159,36 @@ object Mysql2OrcParall {
     spark.close()
   }
 
+  def castInt2BigInt(df:DataFrame,columnIndex:scala.Int): DataFrame ={
 
-
-  def doEtlPerTbl(ss: SparkSession, sql: String, outPath: String, orcCoalesce: Int)(implicit xc: ExecutionContext) = Future {
-    var message = "NULl";
-    if(0 == orcCoalesce){
-      ss.sql(sql).write.orc(outPath)
-    }else {
-      ss.sql(sql).coalesce(orcCoalesce).write.orc(outPath)
+    df.schema(df.columns.apply(columnIndex)).dataType match {
+      case IntegerType =>
+        ColumnUtil.castColumnTo(df,df.columns.apply(columnIndex),LongType)
+      case _ => df
     }
 
-    message = "[INFO] execute the sql : " + sql + " and write the orc file in " + outPath + " successfully!"
+  }
+
+  def castInt2BigInt(df:DataFrame): DataFrame ={
+    var finalDf = df
+    for (i <- 0 until  df.columns.length) {
+      finalDf = castInt2BigInt(finalDf,i)
+    }
+    return finalDf
+  }
+
+  def doEtlPerTbl(ss: SparkSession, sql: String, outPath: String, orcCoalesce: Int)(implicit xc: ExecutionContext) = Future {
+    var message = "[INFO] execute the sql : " + sql + " and write the orc file in " + outPath + " with orcCoalesce: "+orcCoalesce+" successfully!"
     println(message)
+    val df = castInt2BigInt(ss.sql(sql))
+    println("[LVXIN] The final schema infomation is:")
+    df.printSchema()
+    if(0 == orcCoalesce){
+    df.write.orc(outPath)
+    }else {
+      df.coalesce(orcCoalesce).write.orc(outPath)
+    }
+
     message
 
   }
