@@ -42,7 +42,7 @@ object Mysql2OrcSingle {
         val orcPath = properties.getProperty(ETLConst.ETL_TAGET_PATH)
         val orcCoalesce = properties.getProperty(ETLConst.ETL_COALESCE, ETLConst.ETL_COALESCE_DEFAULT_VALUE).toInt
         println("[DEBUG] "+ETLConst.ETL_COALESCE+" = "+ orcCoalesce)
-        
+
         val tblsArray: Array[String] = spark.sparkContext.textFile(tablesPath).collect()
         for (i <- 0 until tblsArray.length) {
             var sql = "select * from " + tblsArray(i)
@@ -95,9 +95,9 @@ object Mysql2OrcSingle {
                         }
 
                         if (j == 0) {
-                            sql = sql + " where " + c_t.apply(0) + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + columns.apply(j) + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
+                            sql = sql + " where " + c_t.apply(0) + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + c_t.apply(0) + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
                         } else {
-                            sql = sql + " and " + columns.apply(j) + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + columns.apply(j) + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
+                            sql = sql + " and " + c_t.apply(0) + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + c_t.apply(0) + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
                         }
                         partitionPath = partitionPath + "/" + columns.apply(j) + "=" + values1.apply(j)
                     }

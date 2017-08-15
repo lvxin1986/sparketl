@@ -93,6 +93,7 @@ object Mysql2OrcParall {
     val tablesPath = properties.getProperty(ETLConst.ETL_TABLES_PATH)
     val orcPath = properties.getProperty(ETLConst.ETL_TAGET_PATH)
     val orcCoalesce = properties.getProperty(ETLConst.ETL_COALESCE, ETLConst.ETL_COALESCE_DEFAULT_VALUE).toInt
+    println("[DEBUG] "+ETLConst.ETL_COALESCE+" = "+ orcCoalesce)
     val pool = Executors.newFixedThreadPool(threadsNum.toInt)
 
     implicit val xc = ExecutionContext.fromExecutorService(pool)
@@ -109,6 +110,7 @@ object Mysql2OrcParall {
         if (columns.length == values1.length) {
           for (j <- 0 until columns.length) {
             val c_t = columns.apply(j).split(":")
+            val col_name=c_t.apply(0)
             val col_type = c_t.apply(1)
             var quotation = "";
             if(!ETLConst.COL_TYPE_NUMBER.contains(col_type.toUpperCase())){
@@ -116,11 +118,11 @@ object Mysql2OrcParall {
             }
 
             if (j == 0) {
-              sql = sql + " where " + c_t.apply(0) + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + columns.apply(j) + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
+              sql = sql + " where " + col_name + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + col_name + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
             } else {
-              sql = sql + " and " + columns.apply(j) + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + columns.apply(j) + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
+              sql = sql + " and " + col_name + ">"+quotation + values1.apply(j) + " 00:00:00"+quotation + " and " + col_name + "<"+quotation + values2.apply(j) + " 00:00:00"+quotation
             }
-            partitionPath = partitionPath + "/" + columns.apply(j) + "=" + values1.apply(j)
+            partitionPath = partitionPath + "/" + col_name + "=" + values1.apply(j)
           }
         } else {
           println("[ERROR] columns length is not equal with values length")
@@ -166,6 +168,7 @@ object Mysql2OrcParall {
     }
 
     message = "[INFO] execute the sql : " + sql + " and write the orc file in " + outPath + " successfully!"
+    println(message)
     message
 
   }
