@@ -160,7 +160,7 @@ object Mysql2OrcParall {
   }
 
   def castInt2BigInt(df:DataFrame,columnIndex:scala.Int): DataFrame ={
-
+    df.cache()
     df.schema(df.columns.apply(columnIndex)).dataType match {
       case IntegerType =>
         ColumnUtil.castColumnTo(df,df.columns.apply(columnIndex),LongType)
@@ -181,16 +181,14 @@ object Mysql2OrcParall {
     var message = "[INFO] execute the sql : " + sql + " and write the orc file in " + outPath + " with orcCoalesce: "+orcCoalesce+" successfully!"
     println(message)
     val df = castInt2BigInt(ss.sql(sql))
-    println("[LVXIN] The final schema infomation is:")
+    println("[INFO] The final schema infomation is:")
     df.printSchema()
     if(0 == orcCoalesce){
-    df.write.orc(outPath)
+      df.write.orc(outPath)
     }else {
       df.coalesce(orcCoalesce).write.orc(outPath)
     }
-
     message
-
   }
 
   def dirExists(hdfsDirectory: String): Boolean = {
