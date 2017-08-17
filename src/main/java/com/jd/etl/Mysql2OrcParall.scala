@@ -41,6 +41,7 @@ object Mysql2OrcParall {
     properties.load(inputStream)
     val threadsNum = properties.getProperty(ETLConst.ETL_THREADS, ETLConst.ETL_THREADS_DEFAUL_VALUE).toInt
     val tablesPath = properties.getProperty(ETLConst.ETL_TABLES_PATH)
+    val schemaPath = properties.getProperty(ETLConst.ETL_SCHEMA_PATH)
     val orcPath = properties.getProperty(ETLConst.ETL_TAGET_PATH)
     val orcCoalesce = properties.getProperty(ETLConst.ETL_COALESCE, ETLConst.ETL_COALESCE_DEFAULT_VALUE).toInt
 
@@ -48,17 +49,28 @@ object Mysql2OrcParall {
     implicit val xc = ExecutionContext.fromExecutorService(pool)
     val tasks: mutable.MutableList[Future[String]] = mutable.MutableList[Future[String]]()
     var tblsArray: Array[String] = spark.sparkContext.textFile(tablesPath).collect()
+    var schmsArray: Array[String] = spark.sparkContext.textFile(schemaPath).collect()
     val status: mutable.MutableList[String] = mutable.MutableList[String]()
+    var schemaMap:Map[String,String] = initSchemaMap(schmsArray)
+
     for (i <- 0 until tblsArray.length) {
-      var sql = "select * from " + tblsArray(i)
-      if (dirExists(orcPath + tblsArray(i) + "/_SUCCESS")) {
-        println("[WARN]" + orcPath + tblsArray(i) + "/_SUCCESS exist, skipped it")
+      var tbSch: Array[String] = tblsArray.apply(i).split("\\s")
+      var tableName = tbSch.apply(0)
+      var columns = schemaMap.apply(tbSch.apply(1))
+      var sql:String = ""
+      if (columns.equals("") || columns == null) {
+        sql = "select * from " + tbSch.apply(0)
       } else {
-        if (dirExists(orcPath + tblsArray(i))) {
-          println("[WARN]" + orcPath + tblsArray(i) + " exist, but " + orcPath + tblsArray(i) + "/_SUCCESS not exist,removing " + orcPath + tblsArray(i) + " and reimport")
-          fs.delete(new org.apache.hadoop.fs.Path(orcPath + tblsArray(i)), true)
+        sql = "select " + columns + " from " + tbSch.apply(0)
+      }
+      if (dirExists(orcPath + tableName + "/_SUCCESS")) {
+        println("[WARN]" + orcPath + tableName + "/_SUCCESS exist, skipped it")
+      } else {
+        if (dirExists(orcPath + tableName)) {
+          println("[WARN]" + orcPath + tableName + " exist, but " + orcPath + tableName + "/_SUCCESS not exist,removing " + orcPath + tableName + " and reimport")
+          fs.delete(new org.apache.hadoop.fs.Path(orcPath + tableName), true)
         }
-        val task = doEtlPerTbl(spark, sql, orcPath + tblsArray(i), orcCoalesce)
+        val task = doEtlPerTbl(spark, sql, orcPath + tableName, orcCoalesce)
         task.onComplete {
           case Success(result) =>
             println(s"result = $result")
@@ -72,7 +84,7 @@ object Mysql2OrcParall {
 
     }
 
-    Await.result(Future.sequence(tasks), Duration(30, DAYS))
+    Await.ready(Future.sequence(tasks), Duration(30, DAYS))
     println("[INFO] All Jobs has completed and the informations are:")
     for (i <- 0 until status.length) {
       println("[INFO]" + status(i))
@@ -93,17 +105,30 @@ object Mysql2OrcParall {
     properties.load(inputStream)
     val threadsNum = properties.getProperty(ETLConst.ETL_THREADS, ETLConst.ETL_THREADS_DEFAUL_VALUE).toInt
     val tablesPath = properties.getProperty(ETLConst.ETL_TABLES_PATH)
+    val schemaPath = properties.getProperty(ETLConst.ETL_SCHEMA_PATH)
     val orcPath = properties.getProperty(ETLConst.ETL_TAGET_PATH)
     val orcCoalesce = properties.getProperty(ETLConst.ETL_COALESCE, ETLConst.ETL_COALESCE_DEFAULT_VALUE).toInt
     println("[DEBUG] "+ETLConst.ETL_COALESCE+" = "+ orcCoalesce)
-    val pool = Executors.newFixedThreadPool(threadsNum.toInt)
+    val pool = Executors.newFixedThreadPool(threadsNum)
 
     implicit val xc = ExecutionContext.fromExecutorService(pool)
     val tasks: mutable.MutableList[Future[String]] = mutable.MutableList[Future[String]]()
     var tblsArray: Array[String] = spark.sparkContext.textFile(tablesPath).collect()
+    var schmsArray: Array[String] = spark.sparkContext.textFile(schemaPath).collect()
     val status: mutable.MutableList[String] = mutable.MutableList[String]()
+    var schemaMap:Map[String,String] = initSchemaMap(schmsArray)
+
     for (i <- 0 until tblsArray.length) {
-      var sql = "select * from " + tblsArray(i)
+      var tbSch: Array[String] = tblsArray.apply(i).split("\\s")
+      var tableName = tbSch.apply(0)
+      var columns = schemaMap.apply(tbSch.apply(1))
+      var sql:String = ""
+      if (columns.equals("") || columns == null) {
+        sql = "select * from " + tbSch.apply(0)
+      } else {
+        sql = "select " + columns + " from " + tbSch.apply(0)
+      }
+      //var sql = "select * from " + tblsArray(i)
       var partitionPath = "";
       if (filterCol != null && !filterCol.equals("") && filterVal1 != null && !filterVal1.equals("") && filterVal2 != null && !filterVal2.equals("")) {
         val columns: Array[String] = filterCol.split(",")
@@ -130,14 +155,14 @@ object Mysql2OrcParall {
           println("[ERROR] columns length is not equal with values length")
         }
       }
-      if (dirExists(orcPath + tblsArray(i) + partitionPath + "/_SUCCESS")) {
-        println("[WARN]" + orcPath + tblsArray(i) + partitionPath + "/_SUCCESS exist, skipped it")
+      if (dirExists(orcPath + tableName + partitionPath + "/_SUCCESS")) {
+        println("[WARN]" + orcPath + tableName + partitionPath + "/_SUCCESS exist, skipped it")
       } else {
-        if (dirExists(orcPath + tblsArray(i) + partitionPath)) {
-          println("[WARN]" + orcPath + tblsArray(i) + partitionPath + " exist, but " + orcPath + tblsArray(i) + partitionPath + "/_SUCCESS not exist,removing " + orcPath + tblsArray(i) + partitionPath + " and reimport")
-          fs.delete(new org.apache.hadoop.fs.Path(orcPath + tblsArray(i) + partitionPath), true)
+        if (dirExists(orcPath + tableName + partitionPath)) {
+          println("[WARN]" + orcPath + tableName + partitionPath + " exist, but " + orcPath + tableName + partitionPath + "/_SUCCESS not exist,removing " + orcPath + tableName + partitionPath + " and reimport")
+          fs.delete(new org.apache.hadoop.fs.Path(orcPath + tableName + partitionPath), true)
         }
-        val task = doEtlPerTbl(spark, sql, orcPath + tblsArray(i) + partitionPath, orcCoalesce)
+        val task = doEtlPerTbl(spark, sql, orcPath + tableName + partitionPath, orcCoalesce)
         task.onComplete {
           case Success(result) =>
             println(s"result = $result")
@@ -151,7 +176,7 @@ object Mysql2OrcParall {
 
     }
 
-    Await.result(Future.sequence(tasks), Duration(30, DAYS))
+    Await.ready(Future.sequence(tasks), Duration(30, DAYS))
     println("[INFO] All Jobs has completed and the informations are:")
     for (i <- 0 until status.length) {
       println("[INFO]" + status(i))
@@ -194,5 +219,29 @@ object Mysql2OrcParall {
   def dirExists(hdfsDirectory: String): Boolean = {
     val exists = fs.exists(new org.apache.hadoop.fs.Path(hdfsDirectory))
     return exists
+  }
+
+  def initSchemaMap(schmsArray: Array[String]): Map[String, String]={
+    var schemaMap:Map[String, String] = Map()
+    for (i <- 0 until schmsArray.length) {
+      var schema: String = schmsArray.apply(i)
+      var strs: Array[String] = schema.split("\\s")
+      var key: String = strs.apply(0)
+      var value: String = strs.apply(1)
+      value = value.subSequence(7,value.length-1).toString
+      var colAndVals: Array[String] = value.split(",")
+      var columns: String = ""
+      for (j <- 0 until colAndVals.length) {
+        var colAndVal = colAndVals.apply(j).split(":")
+        var column: String = colAndVal.apply(0)
+        if (j == 0) {
+          columns = column
+        } else {
+          columns = columns + "," + column
+        }
+      }
+      schemaMap += (key -> columns)
+    }
+    return schemaMap
   }
 }
