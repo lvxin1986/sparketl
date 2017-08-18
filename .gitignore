@@ -1,1 +1,9 @@
 *.class
+/.idea/*
+src/main/java/com/jd/etl/test/*
+target/*
+out/*
+/.gitignore
+.idea/
+src/main/java/com/jd/etl/test/
+target/
