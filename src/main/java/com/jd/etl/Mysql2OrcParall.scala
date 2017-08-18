@@ -1,15 +1,13 @@
 package com.jd.etl
 
 import java.io.ByteArrayInputStream
-import java.lang.Exception
 import java.util.Properties
-
-import org.apache.spark.sql.{DataFrame, SparkSession}
 import java.util.concurrent.Executors
 
 import com.jd.etl.consts.ETLConst
 import com.jd.etl.utils.ColumnUtil
-import org.apache.spark.sql.types.{IntegerType, LongType, StringType}
+import org.apache.spark.sql.types.{IntegerType, LongType}
+import org.apache.spark.sql.{DataFrame, SparkSession}
 
 import scala.collection.mutable
 import scala.concurrent._

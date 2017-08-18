@@ -1,16 +1,14 @@
 package com.jd.etl
 
 import java.io.ByteArrayInputStream
-import java.lang.Exception
 import java.text.SimpleDateFormat
-import java.util.{Calendar, Properties}
-
-import org.apache.spark.sql.{DataFrame, SparkSession}
 import java.util.concurrent.Executors
+import java.util.{Calendar, Properties}
 
 import com.jd.etl.consts.ETLConst
 import com.jd.etl.utils.ColumnUtil
-import org.apache.spark.sql.types.{IntegerType, LongType, StringType}
+import org.apache.spark.sql.types.{IntegerType, LongType}
+import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.storage.StorageLevel
 
 import scala.collection.mutable
@@ -27,7 +25,7 @@ object Mysql2OrcParallDate {
     val dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
 
     def main(args: Array[String]) {
-        if (args.size == 1) {
+        if (args.length == 1) {
             InitData(args(0))
         } else {
             ImportDataDaily(args(0), args(1), args(2), args(3))
