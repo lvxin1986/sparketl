@@ -1,14 +1,11 @@
 package com.jd.etl
 
-import java.io.ByteArrayInputStream
 import java.text.SimpleDateFormat
-import java.util
 import java.util.concurrent.Executors
 import java.util.{Calendar, Properties}
 
 import com.jd.etl.consts.ETLConst
-import com.jd.etl.utils.ColumnUtil
-import org.apache.spark.sql.types.{IntegerType, LongType}
+import com.jd.etl.utils.EtlUtil
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.storage.StorageLevel
 
@@ -23,220 +20,169 @@ import scala.util.{Failure, Success}
 object EtlParallel {
   val hadoopConf = new org.apache.hadoop.conf.Configuration()
   val fs = org.apache.hadoop.fs.FileSystem.get(hadoopConf)
-  val dateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss")
+  val dateFormat = new SimpleDateFormat(ETLConst.ETL_DATE_FORMAT)
   var persistStatus: mutable.Map[String, Boolean] = collection.mutable.Map[String, Boolean]()
 
   def main(args: Array[String]) {
 
     if (args.length == 1) {
-      InitData(args(0))
+      initData(args(0))
     } else {
       etlDataDaily(args(0), args(1), args(2), args(3))
     }
+    System.exit(0)
   }
 
-    def InitData(workSpace: String): Unit = {
-      val spark = SparkSession.builder.appName("EtlParallel_Init_No_Partition").enableHiveSupport().getOrCreate
+/*
+* initData
+* 从多数据源抽取数据至未分区表
+* */
+  def initData(workSpace: String): Unit = {
+    val spark = SparkSession.builder.appName("EtlParallel_Init_No_Partition").enableHiveSupport().getOrCreate
 
-      val properties = new Properties
-      properties.load(new ByteArrayInputStream(spark.sparkContext.textFile(workSpace + "/etl.properties").collect().mkString("\n").getBytes()))
-      val threadsNum = properties.getProperty(ETLConst.ETL_THREADS, ETLConst.ETL_THREADS_DEFAUL_VALUE).toInt
-      //val tergetTable = properties.getProperty(ETLConst.ETL_TARGET_TABLE)
-      val orcPath = properties.getProperty(ETLConst.ETL_TARGET_PATH)
-      val orcCoalesce = properties.getProperty(ETLConst.ETL_COALESCE, ETLConst.ETL_COALESCE_DEFAULT_VALUE).toInt
+    var config = new EtlConfig(workSpace, spark)
+    val pool = Executors.newFixedThreadPool(config.threadsNum)
+    implicit val xc = ExecutionContext.fromExecutorService(pool)
+    val tasks: mutable.MutableList[Future[String]] = mutable.MutableList[Future[String]]()
+    val tblsArray: Array[String] = spark.sparkContext.textFile(workSpace + ETLConst.ETL_TABLELIST_FILE).collect()
+    val schemasArray: Array[String] = spark.sparkContext.textFile(workSpace + ETLConst.ETL_SCHEMALIST_FILE).collect()
+    val status: mutable.MutableList[String] = mutable.MutableList[String]()
+    var schemaMap: Map[String, String] = EtlUtil.initSchemaMap(schemasArray)
 
-      val pool = Executors.newFixedThreadPool(threadsNum)
-      implicit val xc = ExecutionContext.fromExecutorService(pool)
-      val tasks: mutable.MutableList[Future[String]] = mutable.MutableList[Future[String]]()
-      val tblsArray: Array[String] = spark.sparkContext.textFile(workSpace + "/tables.list").collect()
-      val schemasArray: Array[String] = spark.sparkContext.textFile(workSpace + "/schemas.list").collect()
-      val status: mutable.MutableList[String] = mutable.MutableList[String]()
-      var schemaMap: Map[String, String] = initSchemaMap(schemasArray)
-
-      for (i <- 0 until tblsArray.length) {
-        var tbSch: Array[String] = tblsArray.apply(i).split("\\s+")
-        var tableName = tbSch.apply(0)
-        var columns = schemaMap.apply(tbSch.apply(1))
-        var sql: String = ""
-        if (columns.equals("") || columns == null) {
-          sql = "select * from " + tbSch.apply(0)
-        } else {
-          sql = "select " + columns + " from " + tbSch.apply(0)
-        }
-
-        val df = castInt2BigInt(spark.sql(sql))
-        df.persist(StorageLevel.MEMORY_AND_DISK_SER)
-        var condition = "";
-
-        if (dirExists(orcPath + tableName + "/_SUCCESS")) {
-          println("[WARN]" + orcPath + tableName + "/_SUCCESS exist, skipped it")
-        } else {
-          if (dirExists(orcPath + tableName)) {
-            println("[WARN]" + orcPath + tableName + " exist, but " + orcPath + tableName + "/_SUCCESS not exist,removing " + orcPath + tableName + " and reimport")
-            fs.delete(new org.apache.hadoop.fs.Path(orcPath + tableName), true)
-          }
-          //val task = doEtlPerTbl(spark, sql, orcPath + tableName, orcCoalesce)
-          val task = doEtlPerTbl(df, condition, orcPath + tableName, orcCoalesce)
-          task.onComplete {
-            case Success(result) =>
-              println(s"result = $result")
-              status += result
-            case Failure(e) =>
-              println(e.getMessage)
-              status += e.getMessage
-          }
-          tasks += task
-        }
-
+    for (i <- 0 until tblsArray.length) {
+      var tbSch: Array[String] = tblsArray.apply(i).split("\\s+")
+      var tableName = tbSch.apply(0)
+      var columns = schemaMap.apply(tbSch.apply(1))
+      var sql: String = ""
+      if (columns.equals("") || columns == null) {
+        sql = "select * from " + tbSch.apply(0)
+      } else {
+        sql = "select " + columns + " from " + tbSch.apply(0)
       }
 
-      Await.ready(Future.sequence(tasks), Duration(30, DAYS))
-      println("[INFO] All Jobs has completed and the informations are:")
-      for (i <- 0 until status.length) {
-        println("[INFO]" + status(i))
+      val df = EtlUtil.castInt2BigInt(spark.sql(sql))
+      df.persist(StorageLevel.MEMORY_AND_DISK_SER)
+
+      if (EtlUtil.dirExists(fs, config.targetPath + tableName + "/_SUCCESS")) {
+        println("[WARN]" + config.targetPath + tableName + "/_SUCCESS exist, skipped it")
+      } else {
+        if (EtlUtil.dirExists(fs, config.targetPath + tableName)) {
+          println("[WARN]" + config.targetPath + tableName + " exist, but " + config.targetPath + tableName + "/_SUCCESS not exist,removing " + config.targetPath + tableName + " and reimport")
+          fs.delete(new org.apache.hadoop.fs.Path(config.targetPath + tableName), true)
+        }
+        val task = doEtlPerTbl(df, null, config.targetPath + tableName, config.orcCoalesce)
+        task.onComplete {
+          case Success(result) =>
+            println(s"result = $result")
+            status += result
+          case Failure(e) =>
+            println(e.getMessage)
+            status += e.getMessage
+        }
+        tasks += task
       }
-      spark.close()
 
     }
 
+    Await.ready(Future.sequence(tasks), Duration(30, DAYS))
+    println("[INFO] All Jobs has completed and the informations are:")
+    for (i <- 0 until status.length) {
+      println("[INFO]" + status(i))
+    }
+    spark.close()
+
+  }
+
+/*
+* etlDataDaily
+* 从单数据源抽取数据至分区表
+* */
   def etlDataDaily(workSpace: String, filterCol: String, filterVal1: String, filterVal2: String): Unit = {
     val spark = SparkSession.builder.appName("EtlParallel_2_Orc_Daily") // optional and will be autogenerated if not specified
       .enableHiveSupport() // self-explanatory, isn't it?
       .getOrCreate
-    val properties = new Properties
-    properties.load(new ByteArrayInputStream(spark.sparkContext.textFile(workSpace + "/etl.properties").collect().mkString("\n").getBytes()))
-    val tblsArray: Array[String] = spark.sparkContext.textFile(workSpace + "/tables.list").collect()
-    val schemasArray: Array[String] = spark.sparkContext.textFile(workSpace + "/schemas.list").collect()
-    val threadsNum = properties.getProperty(ETLConst.ETL_THREADS, ETLConst.ETL_THREADS_DEFAUL_VALUE).toInt
-    val tergetTable = properties.getProperty(ETLConst.ETL_TARGET_TABLE)
-    val tergetPartition = properties.getProperty(ETLConst.ETL_TARGET_PARTITION)
-    val orcPath = properties.getProperty(ETLConst.ETL_TARGET_PATH)
-    val orcCoalesce = properties.getProperty(ETLConst.ETL_COALESCE, ETLConst.ETL_COALESCE_DEFAULT_VALUE).toInt
-    val pool = Executors.newFixedThreadPool(threadsNum)
+
+    var config = new EtlConfig(workSpace, spark)
+    val tblsArray: Array[String] = spark.sparkContext.textFile(workSpace + ETLConst.ETL_TABLELIST_FILE).collect()
+    val schemasArray: Array[String] = spark.sparkContext.textFile(workSpace + ETLConst.ETL_SCHEMALIST_FILE).collect()
+    val pool = Executors.newFixedThreadPool(config.threadsNum)
     implicit val xc = ExecutionContext.fromExecutorService(pool)
     val tasks: mutable.MutableList[Future[String]] = mutable.MutableList[Future[String]]()
     val status: mutable.MutableList[String] = mutable.MutableList[String]()
-    val schemaMap: Map[String, String] = initSchemaMap(schemasArray)
+    val schemaMap: Map[String, String] = EtlUtil.initSchemaMap(schemasArray)
 
-    for (i <- 0 until tblsArray.length) {
-      val tbl_schema_pair: Array[String] = tblsArray.apply(i).split("\\s+")
-      val tblName = tbl_schema_pair.apply(0)
-      persistStatus += (tblName -> false)
-      val sql: String = generateSql(schemaMap, tbl_schema_pair, filterCol, filterVal1, filterVal2)
-      var df = castInt2BigInt(spark.sql(sql))
-      val status: mutable.MutableList[String] = mutable.MutableList[String]()
-      df = df.persist(StorageLevel.MEMORY_AND_DISK_SER)
-      println( "[INFO] execute the sql : " + sql + " and store in memory and disk!")
-      val partitionCols = filterCol.split(",")
-      for (j <- 0 until partitionCols.length) {
-        val partition_col_name_type_pair = partitionCols.apply(j).split(":")
-        val col_name = partition_col_name_type_pair.apply(0)
-        val col_type = partition_col_name_type_pair.apply(1)
-        var start_time = filterVal1.split(",").apply(j) + " 00:00:00"
-        var end_time = filterVal2.split(",").apply(j) + " 00:00:00"
+    val tbl_schema_pair: Array[String] = tblsArray.apply(0).split("\\s+")
+    val tblName = tbl_schema_pair.apply(0)
+    persistStatus += (tblName -> false)
+    val sql: String = EtlUtil.generateSql(schemaMap, tbl_schema_pair, filterCol, filterVal1, filterVal2)
+    var df = EtlUtil.castInt2BigInt(spark.sql(sql))
+    df = df.persist(StorageLevel.MEMORY_AND_DISK_SER)
+    println("[INFO] execute the sql : " + sql + " and store in memory and disk!")
+    val partitionCols = filterCol.split(",")
+    for (j <- 0 until partitionCols.length) {
+      val partition_col_name_type_pair = partitionCols.apply(j).split(":")
+      val col_name = partition_col_name_type_pair.apply(0)
+      val col_type = partition_col_name_type_pair.apply(1)
+      var start_time = filterVal1.split(",").apply(j) + " 00:00:00"
+      var end_time = filterVal2.split(",").apply(j) + " 00:00:00"
 
-        var quotation = "";
-        if (!ETLConst.COL_TYPE_NUMBER.contains(col_type.toUpperCase())) {
-          quotation = "'"
-        }
-        while (!start_time.equals(end_time)) {
-          var cal: Calendar = Calendar.getInstance();
-          cal.setTime(dateFormat.parse(end_time))
-          cal.add(Calendar.DATE, -1)
-          var yesterday = dateFormat.format(cal.getTime)
-          val partitionPath = "/" + tergetPartition + "=" + yesterday.substring(0, 10) + "/"
-          val condition = col_name + ">" + quotation + yesterday + quotation + " and " + col_name + "<" + quotation + end_time + quotation
-          val totalPath = orcPath + tergetTable + partitionPath
+      var quotation = "";
+      if (!ETLConst.COL_TYPE_NUMBER.contains(col_type.toUpperCase())) {
+        quotation = "'"
+      }
+      while (!start_time.equals(end_time)) {//遍历配置日期，按天分区
+        var cal: Calendar = Calendar.getInstance();
+        cal.setTime(dateFormat.parse(end_time))
+        cal.add(Calendar.DATE, -1)
+        var yesterday = dateFormat.format(cal.getTime)
+        val partitionPath = "/" + config.targetPartition + "=" + yesterday.substring(0, 10) + "/"
+        val condition = col_name + ">=" + quotation + yesterday + quotation + " and " + col_name + "<" + quotation + end_time + quotation
+        val totalPath = config.targetPath + config.targetTable + partitionPath
 
-          if (dirExists(totalPath + "_SUCCESS")) {
-            println("[WARN]" + totalPath + "_SUCCESS exist, skipped it")
-          } else {
-            if (dirExists(totalPath)) {
-              println("[WARN]" + totalPath + " exist, but " + totalPath + "_SUCCESS not exist,removing " + totalPath + " and reimport")
-              fs.delete(new org.apache.hadoop.fs.Path(totalPath), true)
-            }
-            if (persistStatus.get(tblName).get == false) {
-              println("[INFO] First execute for table " + tblName + "with condition " + condition)
-              status += doEtlPerDate(df, condition, totalPath, orcCoalesce)
-              persistStatus.put(tblName, true)
-            } else {
-              println("[INFO] More execute for table " + tblName + "with condition " + condition)
-              val task = doEtlPerTbl(df, condition, totalPath, orcCoalesce)
-              task.onComplete {
-                case Success(result) =>
-                  println(s"result = $result")
-                case Failure(e) =>
-                  println(e.getMessage)
-                  status += e.getMessage
-              }
-              tasks += task
-            }
+        if (EtlUtil.dirExists(fs, totalPath + "_SUCCESS")) {
+          println("[WARN]" + totalPath + "_SUCCESS exist, skipped it")
+        } else {
+          if (EtlUtil.dirExists(fs, totalPath)) {
+            println("[WARN]" + totalPath + " exist, but " + totalPath + "_SUCCESS not exist,removing " + totalPath + " and reimport")
+            fs.delete(new org.apache.hadoop.fs.Path(totalPath), true)
           }
-
-          end_time = yesterday
+          if (persistStatus.get(tblName).get == false) {
+            println("[INFO] First execute for table " + tblName + "with condition " + condition)
+            status += doEtlPerDate(df, condition, totalPath, config.orcCoalesce)
+            persistStatus.put(tblName, true)
+          } else {
+            println("[INFO] More execute for table " + tblName + "with condition " + condition)
+            val task = doEtlPerTbl(df, condition, totalPath, config.orcCoalesce)
+            task.onComplete {
+              case Success(result) =>
+                println(s"result = $result")
+              case Failure(e) =>
+                println(e.getMessage)
+                status += e.getMessage
+            }
+            tasks += task
+          }
         }
+
+        end_time = yesterday
       }
-      Await.ready(Future.sequence(tasks), Duration(30, DAYS))
-      println("[INFO] All Jobs has completed and the informations are:")
-      for (i <- 0 until status.length) {
-        println("[INFO]" + status(i))
-      }
-      df.unpersist()
-      tasks.clear()
     }
+    Await.ready(Future.sequence(tasks), Duration(30, DAYS))
+    println("[INFO] All Jobs has completed and the informations are:")
+    for (i <- 0 until status.length) {
+      println("[INFO]" + status(i))
+    }
+    df.unpersist()
+    tasks.clear()
     println("[INFO] All Jobs has completed")
     spark.close()
   }
 
-  def generateSql(schema_info: Map[String, String], tbl_schema_pair: Array[String], filterCol: String, filterVal1: String, filterVal2: String): String = {
-    var sql: String = ""
-    if (schema_info.equals("") || schema_info == null) {
-      sql = "select * from " + tbl_schema_pair.apply(0)
-    } else {
-      sql = "select " + schema_info.apply(tbl_schema_pair.apply(1)) + " from " + tbl_schema_pair.apply(0)
-    }
-    val partitionCols: Array[String] = filterCol.split(",")
-    val values1: Array[String] = filterVal1.split(",")
-    val values2: Array[String] = filterVal2.split(",")
-    if (partitionCols.length == values1.length) {
-      for (j <- 0 until partitionCols.length) {
-        val partition_col_name_pair = partitionCols.apply(j).split(":")
-        val partition_col_name = partition_col_name_pair.apply(0)
-        val partition_col_type = partition_col_name_pair.apply(1)
-        var quotation = ""
-        if (!ETLConst.COL_TYPE_NUMBER.contains(partition_col_type.toUpperCase())) {
-          quotation = "'"
-        }
-
-        if (j == 0) {
-          sql = sql + " where " + partition_col_name + ">" + quotation + values1.apply(j) + " 00:00:00" + quotation + " and " + partition_col_name + "<" + quotation + values2.apply(j) + " 00:00:00" + quotation
-        } else {
-          sql = sql + " or " + partition_col_name + ">" + quotation + values1.apply(j) + " 00:00:00" + quotation + " and " + partition_col_name + "<" + quotation + values2.apply(j) + " 00:00:00" + quotation
-        }
-      }
-    }
-    return sql
-  }
-
-  def castInt2BigInt(df: DataFrame, columnIndex: scala.Int): DataFrame = {
-
-    df.schema(df.columns.apply(columnIndex)).dataType match {
-      case IntegerType =>
-        ColumnUtil.castColumnTo(df, df.columns.apply(columnIndex), LongType)
-      case _ => df
-    }
-
-  }
-
-  def castInt2BigInt(df: DataFrame): DataFrame = {
-    var finalDf = df
-    for (i <- 0 until df.columns.length) {
-      finalDf = castInt2BigInt(finalDf, i)
-    }
-    return finalDf
-  }
-
-  def doEtlPerDate(df: DataFrame, condition: String, outPath: String, orcCoalesce: Int):String = {
+/*
+* doEtlPerDate
+* 当前表第一次导orc文件时调用此方法，数据真正持久化
+* */
+  def doEtlPerDate(df: DataFrame, condition: String, outPath: String, orcCoalesce: Int): String = {
     var message = "[INFO] filter the dataframe : " + condition + " and write the orc file in " + outPath + " with orcCoalesce: " + orcCoalesce + " for first time Synchronous successfully!"
     println("[INFO] The final schema infomation is:")
     df.printSchema()
@@ -279,49 +225,4 @@ object EtlParallel {
     message
   }
 
-  /*def doEtlPerTbl(ss: SparkSession, sql: String, outPath: String, orcCoalesce: Int)(implicit xc: ExecutionContext) = Future {
-      var message = "[INFO] execute the sql : " + sql + " and write the orc file in " + outPath + " with orcCoalesce: "+orcCoalesce+" successfully!"
-      println(message)
-      val df = castInt2BigInt(ss.sql(sql))
-      println("[LVXIN] The final schema infomation is:")
-      df.printSchema()
-      if(0 == orcCoalesce){
-          df.write.orc(outPath)
-      }else {
-          df.coalesce(orcCoalesce).write.orc(outPath)
-      }
-
-      message
-
-  }*/
-
-  def dirExists(hdfsDirectory: String): Boolean = {
-    val exists = fs.exists(new org.apache.hadoop.fs.Path(hdfsDirectory))
-    return exists
-  }
-
-  def initSchemaMap(schmsArray: Array[String]): Map[String, String] = {
-    var schemaMap: Map[String, String] = Map()
-    for (i <- 0 until schmsArray.length) {
-      var schema: String = schmsArray.apply(i)
-      var strs: Array[String] = schema.split("\\s")
-      var key: String = strs.apply(0)
-      var value: String = strs.apply(1)
-      value = value.subSequence(7, value.length - 1).toString
-      var colAndVals: Array[String] = value.split(",")
-      var columns: String = ""
-      for (j <- 0 until colAndVals.length) {
-        var colAndVal = colAndVals.apply(j).split(":")
-        var column: String = colAndVal.apply(0)
-        if (j == 0) {
-          columns = column
-        } else {
-          columns = columns + "," + column
-        }
-      }
-      println("[INITMAP] " + key + " = " + columns)
-      schemaMap += (key -> columns)
-    }
-    return schemaMap
-  }
 }
